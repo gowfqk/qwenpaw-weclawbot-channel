@@ -58,6 +58,7 @@ class WeClawBotChannel(BaseChannel):
         agent_id: str = "",
         agent_name: str = "",
         command: str = "",
+        bot_prefix: str = "",
         on_reply_sent: OnReplySent = None,
         show_tool_details: bool = True,
         filter_tool_messages: bool = False,
@@ -83,6 +84,7 @@ class WeClawBotChannel(BaseChannel):
             require_mention=require_mention,
         )
         self.enabled = enabled
+        self.bot_prefix = bot_prefix
 
         # Resolve config with env overrides.
         self._token = os.getenv("WECLAWBOT_TOKEN", "").strip() or token
@@ -130,6 +132,7 @@ class WeClawBotChannel(BaseChannel):
             agent_id=getattr(config, "agent_id", "") or "",
             agent_name=getattr(config, "agent_name", "") or "",
             command=getattr(config, "command", "") or "",
+            bot_prefix=getattr(config, "bot_prefix", "") or "",
             on_reply_sent=on_reply_sent,
             show_tool_details=show_tool_details,
             filter_tool_messages=filter_tool_messages,
@@ -273,28 +276,23 @@ class WeClawBotChannel(BaseChannel):
             return
 
         # Store request id so send() can find it for the reply.
-        chat_id = f"default:{self._agent_id}"
-        self._request_ids[chat_id] = request_id
+        to_handle = f"weclawbot:default"
+        self._request_ids[to_handle] = request_id
 
-        # Build and dispatch an agent request.
-        content_parts = [
-            TextContent(type=ContentType.TEXT, text=text.strip()),
-        ]
-        meta = {
-            "bridge_request_id": request_id,
-            "source": "wechat",
-            "agent_id": self._agent_id,
-        }
-        request = self.build_agent_request_from_user_content(
-            channel_id=self.channel,
-            sender_id="weclawbot:default",
-            session_id=chat_id,
-            content_parts=content_parts,
-            channel_meta=meta,
-        )
-        setattr(request, "channel_meta", meta)
-
-        await self.process.handle_message(request)
+        # Enqueue the native payload — the base class consume_one()
+        # will call build_agent_request_from_native() and dispatch.
+        if self._enqueue is not None:
+            self._enqueue({
+                "channel_id": self.channel,
+                "sender_id": to_handle,
+                "session_id": f"weclawbot:{self._agent_id}",
+                "text": text.strip(),
+                "meta": {
+                    "bridge_request_id": request_id,
+                    "source": "wechat",
+                    "agent_id": self._agent_id,
+                },
+            })
 
     # ------------------------------------------------------------------
     # Outbound: send replies back to Bridge
