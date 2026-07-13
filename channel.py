@@ -108,6 +108,41 @@ class WeClawBotChannel(BaseChannel):
         self._request_ids: Dict[str, str] = {}
 
     # ------------------------------------------------------------------
+    # Factory (required by BaseChannel)
+    # ------------------------------------------------------------------
+
+    @classmethod
+    def from_config(
+        cls,
+        process: ProcessHandler,
+        config: Any,
+        on_reply_sent: OnReplySent = None,
+        show_tool_details: bool = True,
+        filter_tool_messages: bool = False,
+        no_text_debounce: bool = True,
+        filter_thinking: bool = False,
+    ) -> "WeClawBotChannel":
+        return cls(
+            process=process,
+            enabled=getattr(config, "enabled", False),
+            token=getattr(config, "token", "") or "",
+            bridge_url=getattr(config, "bridge_url", "") or "",
+            agent_id=getattr(config, "agent_id", "") or "",
+            agent_name=getattr(config, "agent_name", "") or "",
+            command=getattr(config, "command", "") or "",
+            on_reply_sent=on_reply_sent,
+            show_tool_details=show_tool_details,
+            filter_tool_messages=filter_tool_messages,
+            no_text_debounce=no_text_debounce,
+            filter_thinking=filter_thinking,
+            dm_policy=getattr(config, "dm_policy", "") or "open",
+            group_policy=getattr(config, "group_policy", "") or "open",
+            allow_from=getattr(config, "allow_from", None) or [],
+            deny_message=getattr(config, "deny_message", "") or "",
+            require_mention=getattr(config, "require_mention", False),
+        )
+
+    # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------
 
