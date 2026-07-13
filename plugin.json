@@ -1,0 +1,20 @@
+{
+  "id": "weclawbot",
+  "name": "WeClawBot Bridge",
+  "version": "0.1.0",
+  "type": "channel",
+  "description": "WeClawBot-Bridge WS Remote Agent channel for QwenPaw — connects WeChat messages through the Bridge protocol.",
+  "description_i18n": {
+    "zh-CN": "WeClawBot-Bridge WS Remote Agent 频道，通过 Bridge 协议接入微信消息。",
+    "en-US": "WeClawBot-Bridge WS Remote Agent channel — connects WeChat messages through the Bridge protocol."
+  },
+  "entry": {
+    "backend": "plugin.py"
+  },
+  "dependencies": [
+    "websockets>=12.0"
+  ],
+  "qwenpaw_version": {
+    "min": "2.0.0"
+  }
+}
