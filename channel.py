@@ -31,6 +31,115 @@ RECONNECT_MAX = 60.0
 PING_INTERVAL = 25.0
 
 
+# ------------------------------------------------------------------
+# Bridge Protocol Message Builder
+# ------------------------------------------------------------------
+#
+# Inspired by AgentScope Runtime's ResponseBuilder → MessageBuilder →
+# ContentBuilder pattern.  Encapsulates Bridge ws-remote wire format
+# so channel logic never touches raw dicts directly.
+#
+
+class BridgeMessageBuilder:
+    """Fluent builder for Bridge ws-remote protocol messages.
+
+    Usage::
+
+        # Auth
+        msg = BridgeMessageBuilder.auth(token="...", agentId="h", ...)
+
+        # Reply
+        msg = BridgeMessageBuilder.chat_reply(request_id="...", text="Hello")
+
+        # Error
+        msg = BridgeMessageBuilder.error(request_id="...", reason="...")
+
+        # Heartbeat
+        msg = BridgeMessageBuilder.pong()
+    """
+
+    @staticmethod
+    def auth(
+        token: str,
+        agent_id: str,
+        name: str = "",
+        command: str = "",
+        description: str = "",
+    ) -> Dict[str, Any]:
+        return {
+            "type": "auth",
+            "token": token,
+            "agentId": agent_id,
+            "name": name,
+            "command": command,
+            "description": description,
+        }
+
+    @staticmethod
+    def chat_reply(request_id: str, text: str) -> Dict[str, Any]:
+        return {"type": "chat", "id": request_id, "text": text}
+
+    @staticmethod
+    def error(request_id: str, reason: str) -> Dict[str, Any]:
+        return {"type": "error", "id": request_id, "reason": reason}
+
+    @staticmethod
+    def pong() -> Dict[str, Any]:
+        return {"type": "pong"}
+
+
+# ------------------------------------------------------------------
+# Protocol Adapter
+# ------------------------------------------------------------------
+#
+# Separates Bridge wire format from QwenPaw's internal representation.
+# Pattern from AgentScope Runtime's ProtocolAdapter base class:
+# _convert_request() + _convert_response().
+#
+
+class BridgeProtocolAdapter:
+    """Convert between Bridge ws-remote wire format and QwenPaw native format.
+
+    This is a thin translation layer — no WebSocket or I/O logic lives here.
+    The channel class owns the connection lifecycle; the adapter owns the
+    message shape.
+    """
+
+    @staticmethod
+    def native_from_bridge_chat(
+        bridge_msg: Dict[str, Any],
+        *,
+        channel_id: str,
+        agent_id: str,
+    ) -> Optional[Dict[str, Any]]:
+        """Convert a Bridge ``chat`` message into a QwenPaw native payload dict.
+
+        Returns ``None`` when the message should be dropped (non-text, no body).
+        """
+        request_id = bridge_msg.get("id")
+        payload = bridge_msg.get("payload")
+        if not isinstance(request_id, str) or not isinstance(payload, dict):
+            return None
+
+        body = payload.get("message") if isinstance(payload.get("message"), dict) else {}
+        text = body.get("text")
+        if not isinstance(text, str) or not text.strip():
+            return None
+
+        to_handle = f"weclawbot:default"
+        return {
+            "channel_id": channel_id,
+            "sender_id": to_handle,
+            "session_id": f"weclawbot:{agent_id}",
+            "text": text.strip(),
+            "meta": {
+                "bridge_request_id": request_id,
+                "source": "wechat",
+                "agent_id": agent_id,
+            },
+        }
+
+
 class WeClawBotChannel(BaseChannel):
     """WebSocket channel adapter for WeClawBot-Bridge.
 
@@ -197,22 +306,25 @@ class WeClawBotChannel(BaseChannel):
                     max_size=256 * 1024,
                 ) as ws:
                     self._ws = ws
-                    await self._send_raw({
-                        "type": "auth",
-                        "token": self._token,
-                        "agentId": self._agent_id,
-                        "name": self._agent_name,
-                        "command": self._command,
-                        "description": "QwenPaw Channel Plugin",
-                    })
+                    await self._send_raw(BridgeMessageBuilder.auth(
+                        token=self._token,
+                        agent_id=self._agent_id,
+                        name=self._agent_name,
+                        command=self._command,
+                        description="QwenPaw Channel Plugin",
+                    ))
                     raw = await asyncio.wait_for(ws.recv(), timeout=10)
                     auth = self._decode(raw)
                     if auth.get("type") != "auth_ok":
                         reason = auth.get("reason", "unknown")
-                        logger.error(
-                            "WeClawBot: authentication rejected — %s", reason
+                        logger.warning(
+                            "WeClawBot: authentication rejected — %s; retrying in %.0fs",
+                            reason, backoff,
                         )
-                        return  # Do not retry on auth failure.
+                        # Don't treat auth failure as fatal — Bridge may be in
+                        # a transient state (stale connection after restart).
+                        # Retry with backoff so the channel recovers automatically.
+                        raise ConnectionError(f"Bridge auth rejected: {reason}")
                     logger.info(
                         "WeClawBot: authenticated as agent %s", self._agent_id
                     )
@@ -255,7 +367,7 @@ class WeClawBotChannel(BaseChannel):
     async def _handle_inbound(self, msg: Dict[str, Any]) -> None:
         kind = msg.get("type")
         if kind == "ping":
-            await self._send_raw({"type": "pong"})
+            await self._send_raw(BridgeMessageBuilder.pong())
             return
         if kind != "chat":
             if kind == "error":
@@ -264,35 +376,25 @@ class WeClawBotChannel(BaseChannel):
                 )
             return
 
-        request_id = msg.get("id")
-        payload = msg.get("payload")
-        if not isinstance(request_id, str) or not isinstance(payload, dict):
+        # Use the protocol adapter to convert Bridge wire format → QwenPaw native.
+        native = BridgeProtocolAdapter.native_from_bridge_chat(
+            msg,
+            channel_id=self.channel,
+            agent_id=self._agent_id,
+        )
+        if native is None:
             return
 
-        body = payload.get("message") if isinstance(payload.get("message"), dict) else {}
-        text = body.get("text")
-        if not isinstance(text, str) or not text.strip():
-            await self._reply_error(request_id, "Only non-empty text messages are supported")
-            return
+        request_id = native["meta"]["bridge_request_id"]
+        to_handle = native["sender_id"]
 
         # Store request id so send() can find it for the reply.
-        to_handle = f"weclawbot:default"
         self._request_ids[to_handle] = request_id
 
         # Enqueue the native payload — the base class consume_one()
         # will call build_agent_request_from_native() and dispatch.
         if self._enqueue is not None:
-            self._enqueue({
-                "channel_id": self.channel,
-                "sender_id": to_handle,
-                "session_id": f"weclawbot:{self._agent_id}",
-                "text": text.strip(),
-                "meta": {
-                    "bridge_request_id": request_id,
-                    "source": "wechat",
-                    "agent_id": self._agent_id,
-                },
-            })
+            self._enqueue(native)
 
     # ------------------------------------------------------------------
     # Outbound: send replies back to Bridge
@@ -312,11 +414,10 @@ class WeClawBotChannel(BaseChannel):
             logger.warning("WeClawBot: no Bridge request id for reply to %s", to_handle)
             return
         try:
-            await self._send_raw({
-                "type": "chat",
-                "id": request_id,
-                "text": text,
-            })
+            await self._send_raw(BridgeMessageBuilder.chat_reply(
+                request_id=request_id,
+                text=text,
+            ))
         except Exception:
             logger.exception("WeClawBot: failed to send reply for %s", request_id)
 
@@ -350,7 +451,10 @@ class WeClawBotChannel(BaseChannel):
 
     async def _reply_error(self, request_id: str, reason: str) -> None:
         try:
-            await self._send_raw({"type": "error", "id": request_id, "reason": reason})
+            await self._send_raw(BridgeMessageBuilder.error(
+                request_id=request_id,
+                reason=reason,
+            ))
         except Exception:
             logger.debug("WeClawBot: failed to return error to Bridge", exc_info=True)
 
