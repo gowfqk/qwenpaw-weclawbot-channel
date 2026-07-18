@@ -139,6 +139,41 @@ class BridgeProtocolAdapter:
             },
         }
 
+    @staticmethod
+    def invalid_chat_error(bridge_msg: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Build a protocol error for a malformed or unsupported chat request.
+
+        The Bridge keeps a pending request for every inbound ``chat`` message,
+        so a request with an ID must always receive either a chat reply or an
+        error reply.  Messages without an ID cannot be correlated safely.
+        """
+        request_id = bridge_msg.get("id")
+        if not isinstance(request_id, str) or not request_id:
+            return None
+
+        payload = bridge_msg.get("payload")
+        if not isinstance(payload, dict):
+            reason = "Invalid chat payload"
+        else:
+            message = payload.get("message")
+            text = message.get("text") if isinstance(message, dict) else None
+            reason = (
+                "Only non-empty text messages are supported"
+                if not isinstance(text, str) or not text.strip()
+                else "Invalid chat request"
+            )
+        return BridgeMessageBuilder.error(request_id, reason)
+
+    @staticmethod
+    def bridge_chat_reply(request_id: str, text: str) -> Dict[str, Any]:
+        """Convert a QwenPaw text response to the Bridge wire format."""
+        return BridgeMessageBuilder.chat_reply(request_id, text)
+
+    @staticmethod
+    def bridge_error(request_id: str, reason: str) -> Dict[str, Any]:
+        """Convert a QwenPaw processing failure to the Bridge wire format."""
+        return BridgeMessageBuilder.error(request_id, reason)
+
 
 class WeClawBotChannel(BaseChannel):
     """WebSocket channel adapter for WeClawBot-Bridge.
@@ -215,8 +250,6 @@ class WeClawBotChannel(BaseChannel):
         self._running = False
         self._listener_task: Optional[asyncio.Task] = None
         self._outbound_lock = asyncio.Lock()
-        # Map chat_id → Bridge request id for reply routing.
-        self._request_ids: Dict[str, str] = {}
 
     # ------------------------------------------------------------------
     # Factory (required by BaseChannel)
@@ -264,6 +297,8 @@ class WeClawBotChannel(BaseChannel):
             return
         if not self._token:
             logger.error("WeClawBot: WECLAWBOT_TOKEN is required")
+            return
+        if self._listener_task is not None and not self._listener_task.done():
             return
         self._running = True
         self._listener_task = asyncio.create_task(self._listen_loop())
@@ -317,14 +352,12 @@ class WeClawBotChannel(BaseChannel):
                     auth = self._decode(raw)
                     if auth.get("type") != "auth_ok":
                         reason = auth.get("reason", "unknown")
-                        logger.warning(
-                            "WeClawBot: authentication rejected — %s; retrying in %.0fs",
-                            reason, backoff,
-                        )
-                        # Don't treat auth failure as fatal — Bridge may be in
-                        # a transient state (stale connection after restart).
-                        # Retry with backoff so the channel recovers automatically.
-                        raise ConnectionError(f"Bridge auth rejected: {reason}")
+                        logger.error("WeClawBot: authentication rejected — %s", reason)
+                        # auth_fail is a configuration error (token or agent ID),
+                        # not a transient transport failure. Retrying would only
+                        # create a reconnect loop until configuration changes.
+                        self._running = False
+                        return
                     logger.info(
                         "WeClawBot: authenticated as agent %s", self._agent_id
                     )
@@ -383,13 +416,10 @@ class WeClawBotChannel(BaseChannel):
             agent_id=self._agent_id,
         )
         if native is None:
+            error = BridgeProtocolAdapter.invalid_chat_error(msg)
+            if error is not None:
+                await self._send_raw(error)
             return
-
-        request_id = native["meta"]["bridge_request_id"]
-        to_handle = native["sender_id"]
-
-        # Store request id so send() can find it for the reply.
-        self._request_ids[to_handle] = request_id
 
         # Enqueue the native payload — the base class consume_one()
         # will call build_agent_request_from_native() and dispatch.
@@ -409,21 +439,27 @@ class WeClawBotChannel(BaseChannel):
         """Send a text reply back through the Bridge WebSocket."""
         if not self.enabled:
             return
-        request_id = (meta or {}).get("bridge_request_id") or self._request_ids.pop(str(to_handle), None)
+        request_id = (meta or {}).get("bridge_request_id")
         if not request_id:
-            logger.warning("WeClawBot: no Bridge request id for reply to %s", to_handle)
+            logger.warning(
+                "WeClawBot: no Bridge request id for reply to %s; dropping reply",
+                to_handle,
+            )
             return
         try:
-            await self._send_raw(BridgeMessageBuilder.chat_reply(
-                request_id=request_id,
-                text=text,
-            ))
+            await self._send_raw(
+                BridgeProtocolAdapter.bridge_chat_reply(request_id=request_id, text=text)
+            )
         except Exception:
             logger.exception("WeClawBot: failed to send reply for %s", request_id)
 
     async def send_media(self, to_handle: str, part: Any, meta: Optional[Dict[str, Any]] = None) -> None:
-        """Media is not supported; drop silently."""
-        pass
+        """Report unsupported media instead of silently losing a response."""
+        request_id = (meta or {}).get("bridge_request_id")
+        if not request_id:
+            logger.warning("WeClawBot: no Bridge request id for media reply to %s", to_handle)
+            return
+        await self._reply_error(request_id, "Media responses are not supported")
 
     def build_agent_request_from_native(self, native_payload: Any) -> Any:
         """Build AgentRequest from native dict (used for tests / direct injection)."""
@@ -451,10 +487,7 @@ class WeClawBotChannel(BaseChannel):
 
     async def _reply_error(self, request_id: str, reason: str) -> None:
         try:
-            await self._send_raw(BridgeMessageBuilder.error(
-                request_id=request_id,
-                reason=reason,
-            ))
+            await self._send_raw(BridgeProtocolAdapter.bridge_error(request_id, reason))
         except Exception:
             logger.debug("WeClawBot: failed to return error to Bridge", exc_info=True)
 
