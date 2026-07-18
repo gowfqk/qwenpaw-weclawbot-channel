@@ -13,19 +13,19 @@
 ## 安装
 
 ```bash
-# 1. 安装依赖
-pip install websockets
-
-# 2. 安装插件到 QwenPaw
+# 1. 先停止正在运行的 QwenPaw 服务。
+# 插件声明的 Python 依赖会由 QwenPaw 自动安装，无需手动 pip install。
 qwenpaw plugin install /path/to/qwenpaw-weclawbot-channel
 
-# 3. 重启 QwenPaw 使插件生效
+# 2. 启动 QwenPaw
+qwenpaw app
 ```
 
-或放入 QwenPaw 的 plugins 目录：
+也可以在 QwenPaw 停止时将插件复制到 plugins 目录，然后启动 QwenPaw：
 
 ```bash
 cp -r qwenpaw-weclawbot-channel ~/.qwenpaw/plugins/
+qwenpaw app
 ```
 
 ## 配置
@@ -51,13 +51,14 @@ cp -r qwenpaw-weclawbot-channel ~/.qwenpaw/plugins/
 | 字段 | 说明 |
 |---|---|
 | WS Token | Bridge 生成的 Token |
-| Bridge URL | `wss://<your-bridge-url>/ws/agent`（可选） |
+| Bridge URL | 必填。`wss://<your-bridge-url>/ws/agent`（TLS）或 `ws://<bridge-host>:3000/ws/agent`（本地/未启用 TLS） |
 | Agent ID | `qwenpaw`（可选） |
 
 也可通过环境变量配置：
 
 ```bash
 export WECLAWBOT_TOKEN=*** Token ***
+# TLS 反向代理使用 wss://；本地或未启用 TLS 的 Bridge 使用 ws://
 export WECLAWBOT_BRIDGE_URL=wss://<your-bridge-url>/ws/agent
 export WECLAWBOT_AGENT_ID=qwenpaw
 ```
@@ -94,8 +95,12 @@ qwenpaw plugin list | grep weclawbot
 
 - 检查 Token 是否与 Bridge Agent 中生成的一致
 - 确认 Agent ID 匹配
-- 确认 `<your-bridge-url>` 可达：
+- 确认 Bridge 可达（协议需与 Bridge URL 匹配）：
 
 ```bash
-curl -sS https://<your-bridge-url>/api/health
+# 本地或未启用 TLS 的 Bridge
+curl -fsS http://<bridge-host>:3000/api/health
+
+# 经 HTTPS/TLS 反向代理暴露的 Bridge
+curl -fsS https://<your-bridge-url>/api/health
 ```

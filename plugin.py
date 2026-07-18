@@ -35,7 +35,7 @@ class WeClawBotChannelPlugin:
                     "name": "bridge_url",
                     "label": "Bridge URL",
                     "type": "text",
-                    "required": False,
+                    "required": True,
                     "placeholder": "wss://<your-bridge-url>/ws/agent",
                 },
                 {
