@@ -51,16 +51,14 @@ class WeClawBotChannelPlugin:
                     "label": "Agent Name",
                     "type": "text",
                     "required": False,
-                    "placeholder": "QwenPaw",
-                    "default": "QwenPaw",
+                    "placeholder": "留空则沿用 Bridge 面板配置",
                 },
                 {
                     "name": "command",
                     "label": "Command Alias",
                     "type": "text",
                     "required": False,
-                    "placeholder": "qwenpaw",
-                    "default": "qwenpaw",
+                    "placeholder": "留空则沿用 Bridge 面板配置",
                 },
             ],
         )

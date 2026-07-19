@@ -242,8 +242,13 @@ class WeClawBotChannel(BaseChannel):
             or agent_id
             or DEFAULT_AGENT_ID
         )
-        self._agent_name = agent_name or "QwenPaw"
-        self._command = command or "qwenpaw"
+        # Identity fields are optional overrides only. Leave them empty when the
+        # operator did not set them so the Bridge keeps the name/command that were
+        # configured for this Agent in its panel. Forcing "QwenPaw"/"qwenpaw" here
+        # would reset another instance's command on connect and make it impossible
+        # to route to more than one QwenPaw instance from the same Bridge.
+        self._agent_name = agent_name.strip() if agent_name else ""
+        self._command = command.strip() if command else ""
 
         # Runtime state.
         self._ws: Any = None

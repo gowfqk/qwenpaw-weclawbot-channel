@@ -52,7 +52,12 @@ qwenpaw app
 |---|---|
 | WS Token | Bridge 生成的 Token |
 | Bridge URL | 必填。`wss://<your-bridge-url>/ws/agent`（TLS）或 `ws://<bridge-host>:3000/ws/agent`（本地/未启用 TLS） |
-| Agent ID | `qwenpaw`（可选） |
+| Agent ID | 与 Bridge 面板中的 Agent 一致（默认 `qwenpaw`） |
+| Agent Name | 可选。**留空则沿用 Bridge 面板配置**，仅在需要覆盖时填写 |
+| Command Alias | 可选。**留空则沿用 Bridge 面板配置**，仅在需要覆盖时填写 |
+
+> **名称 / 命令以 Bridge 面板为准。** 插件默认不再上报 `Agent Name` / `Command Alias`，
+> 连接时不会改写你在 Bridge 面板里为该 Agent 配置的名称和切换命令。只有留空时想覆盖才填写。
 
 也可通过环境变量配置：
 
@@ -62,6 +67,16 @@ export WECLAWBOT_TOKEN=*** Token ***
 export WECLAWBOT_BRIDGE_URL=wss://<your-bridge-url>/ws/agent
 export WECLAWBOT_AGENT_ID=qwenpaw
 ```
+
+### 接入多个 QwenPaw 实例
+
+一个 Bridge 可以同时接入多个 QwenPaw 实例，供微信端切换。要点：
+
+1. 在 Bridge 面板为每个实例创建独立的 WS Remote Agent，分配**不同的 `Agent ID`**（如 `qwenpaw-a`、`qwenpaw-b`），并各设一个**不同的切换命令**（如 `#qa`、`#qb`）。
+2. 每个 QwenPaw 实例的插件里，`Agent ID` 填对应的 ID，`Token` 填对应的 Token；`Agent Name` / `Command Alias` **留空**，交给 Bridge 面板管理。
+3. 微信端用各自的命令切换（如 `#qa` / `#qb`）。
+
+> 若多个实例都用相同的 `Agent ID`，Bridge 会把先连接的踢下线（同一 ID 只允许一个活动连接），因此务必分配不同的 `Agent ID`。
 
 ## 验证
 
