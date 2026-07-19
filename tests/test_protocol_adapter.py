@@ -110,5 +110,35 @@ class ProtocolAdapterTest(unittest.TestCase):
         }])
 
 
+class IdentityConfigTest(unittest.TestCase):
+    """The plugin must not impose an Agent name/command on the Bridge.
+
+    Sending hardcoded defaults ("QwenPaw"/"qwenpaw") on every connect would
+    reset the panel-configured command and make it impossible to run more than
+    one QwenPaw instance against the same Bridge.
+    """
+
+    def test_unset_identity_fields_stay_empty(self):
+        channel = load_channel_module()
+        instance = channel.WeClawBotChannel(process=None, enabled=True, token="token")
+
+        # Left blank → empty, so the auth handshake defers to the Bridge panel.
+        self.assertEqual(instance._agent_name, "")
+        self.assertEqual(instance._command, "")
+
+    def test_explicit_identity_fields_are_preserved(self):
+        channel = load_channel_module()
+        instance = channel.WeClawBotChannel(
+            process=None,
+            enabled=True,
+            token="token",
+            agent_name="QwenPaw A",
+            command="qa",
+        )
+
+        self.assertEqual(instance._agent_name, "QwenPaw A")
+        self.assertEqual(instance._command, "qa")
+
+
 if __name__ == "__main__":
     unittest.main()
