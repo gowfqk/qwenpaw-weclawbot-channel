@@ -217,10 +217,13 @@ class WeClawBotChannel(BaseChannel):
         super().__init__(
             process,
             on_reply_sent=on_reply_sent,
-            show_tool_details=show_tool_details,
-            filter_tool_messages=filter_tool_messages,
+            # Bridge permits a single reply per request. Suppress QwenPaw's
+            # intermediate tool/thinking messages so the final answer retains
+            # the only available response slot.
+            show_tool_details=False,
+            filter_tool_messages=True,
             no_text_debounce=no_text_debounce,
-            filter_thinking=filter_thinking,
+            filter_thinking=True,
             dm_policy=dm_policy,
             group_policy=group_policy,
             allow_from=allow_from,
@@ -426,6 +429,8 @@ class WeClawBotChannel(BaseChannel):
                 await self._send_raw(error)
             return
 
+        # The request id travels in channel_meta, so replies are correlated
+        # without a shared mutable route that tool-progress messages can consume.
         # Enqueue the native payload — the base class consume_one()
         # will call build_agent_request_from_native() and dispatch.
         if self._enqueue is not None:
@@ -444,6 +449,8 @@ class WeClawBotChannel(BaseChannel):
         """Send a text reply back through the Bridge WebSocket."""
         if not self.enabled:
             return
+        # Request correlation is supplied in channel_meta; do not fall back to
+        # a shared per-chat request ID because concurrent tool runs can overwrite it.
         request_id = (meta or {}).get("bridge_request_id")
         if not request_id:
             logger.warning(
