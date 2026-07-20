@@ -258,6 +258,10 @@ class WeClawBotChannel(BaseChannel):
         self._running = False
         self._listener_task: Optional[asyncio.Task] = None
         self._outbound_lock = asyncio.Lock()
+        # QwenPaw may invoke its delivery callback more than once for one
+        # request. The Bridge accepts exactly one terminal reply per ID.
+        self._completed_request_ids: set[str] = set()
+        self._completed_request_ids_lock = asyncio.Lock()
 
     # ------------------------------------------------------------------
     # Factory (required by BaseChannel)
@@ -458,15 +462,22 @@ class WeClawBotChannel(BaseChannel):
                 to_handle,
             )
             return
-        # QwenPaw's delivery callback can emit tool/thinking progress before
-        # the terminal answer. A caller may set ``final`` in channel_meta; legacy
-        # callbacks remain single-reply final for backward compatibility.
-        final = bool((meta or {}).get("final", True))
+        # QwenPaw can invoke send() more than once for one turn (tool/thinking
+        # progress followed by the answer). Its metadata does not reliably mark
+        # the terminal callback, so complete the Bridge request with the first
+        # reply and suppress later duplicates for that same request ID.
+        async with self._completed_request_ids_lock:
+            if request_id in self._completed_request_ids:
+                logger.debug("WeClawBot: suppressing duplicate reply for %s", request_id)
+                return
+            self._completed_request_ids.add(request_id)
         try:
             await self._send_raw(
-                BridgeProtocolAdapter.bridge_chat_reply(request_id=request_id, text=text, final=final)
+                BridgeProtocolAdapter.bridge_chat_reply(request_id=request_id, text=text, final=True)
             )
         except Exception:
+            async with self._completed_request_ids_lock:
+                self._completed_request_ids.discard(request_id)
             logger.exception("WeClawBot: failed to send reply for %s", request_id)
 
     async def send_media(self, to_handle: str, part: Any, meta: Optional[Dict[str, Any]] = None) -> None:
