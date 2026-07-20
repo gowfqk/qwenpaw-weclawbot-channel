@@ -76,8 +76,8 @@ class BridgeMessageBuilder:
         }
 
     @staticmethod
-    def chat_reply(request_id: str, text: str) -> Dict[str, Any]:
-        return {"type": "chat", "id": request_id, "text": text}
+    def chat_reply(request_id: str, text: str, final: bool = True) -> Dict[str, Any]:
+        return {"type": "chat", "id": request_id, "text": text, "final": final}
 
     @staticmethod
     def error(request_id: str, reason: str) -> Dict[str, Any]:
@@ -165,9 +165,9 @@ class BridgeProtocolAdapter:
         return BridgeMessageBuilder.error(request_id, reason)
 
     @staticmethod
-    def bridge_chat_reply(request_id: str, text: str) -> Dict[str, Any]:
+    def bridge_chat_reply(request_id: str, text: str, final: bool = True) -> Dict[str, Any]:
         """Convert a QwenPaw text response to the Bridge wire format."""
-        return BridgeMessageBuilder.chat_reply(request_id, text)
+        return BridgeMessageBuilder.chat_reply(request_id, text, final)
 
     @staticmethod
     def bridge_error(request_id: str, reason: str) -> Dict[str, Any]:
@@ -458,9 +458,13 @@ class WeClawBotChannel(BaseChannel):
                 to_handle,
             )
             return
+        # QwenPaw's delivery callback can emit tool/thinking progress before
+        # the terminal answer. A caller may set ``final`` in channel_meta; legacy
+        # callbacks remain single-reply final for backward compatibility.
+        final = bool((meta or {}).get("final", True))
         try:
             await self._send_raw(
-                BridgeProtocolAdapter.bridge_chat_reply(request_id=request_id, text=text)
+                BridgeProtocolAdapter.bridge_chat_reply(request_id=request_id, text=text, final=final)
             )
         except Exception:
             logger.exception("WeClawBot: failed to send reply for %s", request_id)

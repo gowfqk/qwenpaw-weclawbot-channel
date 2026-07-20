@@ -32,11 +32,19 @@ async def main() -> None:
     # A final response must keep that ID; no shared per-chat mapping is used.
     await channel.send(
         "weclawbot:default",
+        "正在调用工具…",
+        meta={"bridge_request_id": "req-1", "final": False},
+    )
+    await channel.send(
+        "weclawbot:default",
         "最终回答",
-        meta={"bridge_request_id": "req-1"},
+        meta={"bridge_request_id": "req-1", "final": True},
     )
 
-    assert sent == [BridgeMessageBuilder.chat_reply("req-1", "最终回答")]
+    assert sent == [
+        BridgeMessageBuilder.chat_reply("req-1", "正在调用工具…", final=False),
+        BridgeMessageBuilder.chat_reply("req-1", "最终回答", final=True),
+    ]
 
 
 if __name__ == "__main__":
