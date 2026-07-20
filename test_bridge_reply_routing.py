@@ -6,7 +6,14 @@ import types
 # The plugin imports QwenPaw framework types. Stub their minimal surface so this
 # transport-level test stays runnable outside a full QwenPaw installation.
 base = types.ModuleType("qwenpaw.app.channels.base")
-base.BaseChannel = object
+
+
+class BaseChannel:
+    async def _on_process_completed(self, request, to_handle, send_meta):
+        return None
+
+
+base.BaseChannel = BaseChannel
 base.ContentType = types.SimpleNamespace(TEXT="text")
 base.OnReplySent = object
 base.ProcessHandler = object
@@ -22,6 +29,7 @@ from channel import BridgeMessageBuilder, WeClawBotChannel  # noqa: E402
 async def main() -> None:
     channel = object.__new__(WeClawBotChannel)
     channel.enabled = True
+    channel._reply_started = {}
     sent = []
 
     async def capture(message):
@@ -43,8 +51,17 @@ async def main() -> None:
 
     assert sent == [
         BridgeMessageBuilder.chat_reply("req-1", "正在调用工具…", final=False),
-        BridgeMessageBuilder.chat_reply("req-1", "最终回答", final=True),
+        BridgeMessageBuilder.chat_reply("req-1", "最终回答", final=False),
     ]
+
+    # The framework completion hook emits the terminal frame after every
+    # visible segment has been delivered.
+    await channel._on_process_completed(
+        request=None,
+        to_handle="weclawbot:default",
+        send_meta={"bridge_request_id": "req-1"},
+    )
+    assert sent[-1] == BridgeMessageBuilder.chat_reply("req-1", "", final=True)
 
 
 if __name__ == "__main__":

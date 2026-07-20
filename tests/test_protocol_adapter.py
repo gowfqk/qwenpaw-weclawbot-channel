@@ -22,6 +22,9 @@ def load_channel_module():
         def __init__(self, *args, **kwargs):
             self._enqueue = None
 
+        async def _on_process_completed(self, request, to_handle, send_meta):
+            return None
+
     base.BaseChannel = BaseChannel
     base.ContentType = types.SimpleNamespace(TEXT="text")
     base.OnReplySent = object
@@ -77,6 +80,7 @@ class ProtocolAdapterTest(unittest.TestCase):
             "type": "chat",
             "id": "req_3",
             "text": "done",
+            "final": True,
         })
         self.assertEqual(channel.BridgeProtocolAdapter.bridge_error("req_3", "failed"), {
             "type": "error",
