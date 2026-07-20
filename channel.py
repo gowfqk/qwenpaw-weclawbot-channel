@@ -258,6 +258,13 @@ class WeClawBotChannel(BaseChannel):
         self._running = False
         self._listener_task: Optional[asyncio.Task] = None
         self._outbound_lock = asyncio.Lock()
+        # Tracks whether a reply has already been sent for a given Bridge
+        # request id. The Bridge closes its pending request as soon as it
+        # receives a reply without ``final: false``; to keep the pending
+        # request open across multi-segment replies (e.g. tool progress +
+        # final answer) we emit ``final: false`` for every segment except
+        # the terminal one, which we close via ``_on_process_completed``.
+        self._reply_started: Dict[str, bool] = {}
 
     # ------------------------------------------------------------------
     # Factory (required by BaseChannel)
@@ -458,16 +465,47 @@ class WeClawBotChannel(BaseChannel):
                 to_handle,
             )
             return
-        # QwenPaw's delivery callback can emit tool/thinking progress before
-        # the terminal answer. A caller may set ``final`` in channel_meta; legacy
-        # callbacks remain single-reply final for backward compatibility.
-        final = bool((meta or {}).get("final", True))
         try:
+            # Emit every segment with final=False so the Bridge keeps the
+            # pending request open until we explicitly close it in
+            # _on_process_completed. A missing/true final on the first segment
+            # would make the Bridge close the pending request early and drop
+            # later segments (logged as "收到未知请求 ID 的回复").
             await self._send_raw(
-                BridgeProtocolAdapter.bridge_chat_reply(request_id=request_id, text=text, final=final)
+                BridgeProtocolAdapter.bridge_chat_reply(
+                    request_id=request_id, text=text, final=False
+                )
             )
+            self._reply_started[request_id] = True
         except Exception:
             logger.exception("WeClawBot: failed to send reply for %s", request_id)
+
+    async def _on_process_completed(
+        self,
+        request: Any,
+        to_handle: str,
+        send_meta: Dict[str, Any],
+    ) -> None:
+        """Close the Bridge pending request with a terminal ``final: true``.
+
+        Overrides the (no-op) base hook. QwenPaw calls this once after all
+        reply segments for a request have been sent. We use it to emit the
+        ``final: true`` packet that lets the Bridge release the pending request
+        instead of timing it out or rejecting later segments.
+        """
+        await super()._on_process_completed(request, to_handle, send_meta)
+        request_id = (send_meta or {}).get("bridge_request_id")
+        if request_id and self._reply_started.pop(request_id, False):
+            try:
+                await self._send_raw(
+                    BridgeProtocolAdapter.bridge_chat_reply(
+                        request_id=request_id, text="", final=True
+                    )
+                )
+            except Exception:
+                logger.exception(
+                    "WeClawBot: failed to send final reply for %s", request_id
+                )
 
     async def send_media(self, to_handle: str, part: Any, meta: Optional[Dict[str, Any]] = None) -> None:
         """Report unsupported media instead of silently losing a response."""
